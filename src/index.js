@@ -12,18 +12,20 @@ const { negotiate } = require("./negotiationEngine");
 const { classifyOOOSignal, extractCommitments } = require("./extraction");
 const stateStore = require("./stateStore");
 const candidateSelector = require("./candidateSelector");
+const canvasRenderer = require("./canvasRenderer");
+const confirmListener = require("./confirmListener");
 
 // Last-resort fallback only — used if stateStore/candidateSelector throw.
 // N's real modules, if delivered later, are a drop-in swap for stateStore.js
 // and candidateSelector.js above; nothing else needs to change.
 const { getMockOOOPerson, getMockCandidatesByTask } = require("./mockData");
 
-// TODO(B): replace with real src/canvasRenderer.js — renderTrace(trace) -> posts/updates a Canvas
+// Last-resort fallback only — used if client/channelId aren't available
+// (e.g. some future non-Slack trigger) or the real render/confirm calls throw.
 function stubRenderTrace(trace) {
   console.log(`[canvasRenderer STUB] would render trace for ${trace.taskId}:`, JSON.stringify(trace, null, 2));
 }
 
-// TODO(B): replace with real src/confirmListener.js — listenForConfirm(trace) -> watches for ✅/❌
 function stubListenForConfirm(trace) {
   if (trace.status === "pending_confirm") {
     console.log(`[confirmListener STUB] would post ✅/❌ prompt for task ${trace.taskId} -> ${trace.finalOwner}`);
@@ -35,6 +37,15 @@ const app = new App({
   appToken: process.env.SLACK_APP_TOKEN,
   socketMode: true,
 });
+
+confirmListener.registerConfirmListener(app);
+
+// Guards against duplicate triggers (double "swamped" messages, testing
+// /go-ooo twice back to back, etc.) re-running extraction/negotiation and
+// clobbering commitments that are already mid-negotiation. In-memory is fine
+// for a demo — resets on restart, which just re-opens the cooldown.
+const lastTriggeredAt = new Map();
+const COOLDOWN_MS = 3 * 60 * 1000; // 3 minutes
 
 /**
  * Pulls a user's recent messages from a channel via conversations.history,
@@ -60,6 +71,30 @@ async function fetchRecentUserMessages(client, channelId, userId, limit = 50) {
  * selection -> negotiation -> canvas update -> confirm listener.
  */
 async function runNegotiationFlow(oooUserId, say, client, channelId) {
+  // Guard 1: cooldown — ignore rapid duplicate triggers for the same person.
+  const now = Date.now();
+  const last = lastTriggeredAt.get(oooUserId);
+  if (last && now - last < COOLDOWN_MS) {
+    console.log(`[index.js] Ignoring duplicate trigger for ${oooUserId} (cooldown active)`);
+    if (say) {
+      await say(`Already running a negotiation for you recently — give it a few minutes before triggering again.`);
+    }
+    return [];
+  }
+
+  // Guard 2: don't re-extract/re-negotiate over commitments that are already
+  // mid-negotiation and awaiting a human's ✅/❌ — that would silently
+  // overwrite a pending decision.
+  if (stateStore.hasPendingNegotiations(oooUserId)) {
+    console.log(`[index.js] ${oooUserId} already has pending negotiations awaiting confirmation, skipping re-trigger`);
+    if (say) {
+      await say(`You already have reassignment(s) awaiting confirmation — check for a pending :white_check_mark:/:x: prompt before triggering again.`);
+    }
+    return [];
+  }
+
+  lastTriggeredAt.set(oooUserId, now);
+
   // Get or create this person's real state, and mark them OOO.
   let oooPerson;
   try {
@@ -126,18 +161,44 @@ async function runNegotiationFlow(oooUserId, say, client, channelId) {
   const traces = negotiate(oooPerson, candidatesByTask, personStatesById);
 
   for (const trace of traces) {
-    stubRenderTrace(trace);
-    stubListenForConfirm(trace);
+    const task = (oooPerson.openCommitments || []).find((t) => t.id === trace.taskId);
 
-    // Apply the reassignment to the state store so load numbers stay accurate
-    // for future negotiations, even before B's confirmListener.js exists to
-    // gate this on an actual ✅ reaction.
-    if (trace.status === "pending_confirm" && trace.finalOwner) {
+    if (client && channelId) {
       try {
-        stateStore.reassignCommitment(trace.taskId, oooPerson.userId, trace.finalOwner);
+        await canvasRenderer.renderTrace(client, channelId, trace, task);
       } catch (err) {
-        console.warn(`[index.js] Could not persist reassignment for ${trace.taskId}:`, err.message);
+        console.warn(`[index.js] canvasRenderer.renderTrace failed for ${trace.taskId}, falling back to console log:`, err.message);
+        stubRenderTrace(trace);
       }
+    } else {
+      stubRenderTrace(trace);
+    }
+
+    // BUGFIX: previously this called stateStore.reassignCommitment() here,
+    // immediately, before anyone had actually confirmed anything — meaning
+    // the bot silently reassigned work with zero human consent. Correct
+    // behavior: record it as pending and wait for a real ✅ (reaction, via
+    // confirmListener.js, or manually via /confirm-reassign).
+    if (trace.status === "pending_confirm" && trace.finalOwner) {
+      stateStore.addPendingNegotiation(trace, oooPerson.userId);
+
+      if (client && channelId) {
+        try {
+          await confirmListener.postConfirmRequest(client, channelId, trace);
+        } catch (err) {
+          console.warn(`[index.js] confirmListener.postConfirmRequest failed for ${trace.taskId}, falling back to console log:`, err.message);
+          stubListenForConfirm(trace);
+        }
+      } else {
+        stubListenForConfirm(trace);
+      }
+    }
+
+    // Loose end fix: escalated traces used to just get announced once and
+    // then vanish — no way to find them later. Now persisted so /escalated
+    // can list them and /resolve-escalation can act on them.
+    if (trace.status === "escalated") {
+      stateStore.addEscalatedNegotiation(trace, oooPerson.userId);
     }
   }
 
@@ -145,8 +206,9 @@ async function runNegotiationFlow(oooUserId, say, client, channelId) {
   const escalatedCount = traces.filter((t) => t.status === "escalated").length;
 
   if (say) {
+    const confirmNote = resolvedCount > 0 ? ` Use \`/confirm-reassign <taskId>\` or \`/reject-reassign <taskId>\` to act on pending ones.` : "";
     await say(
-      `:zap: Ran negotiation for *${oooPerson.displayName}*: ${resolvedCount} task(s) resolved pending confirm, ${escalatedCount} escalated to a human.`
+      `:zap: Ran negotiation for *${oooPerson.displayName}*: ${resolvedCount} task(s) awaiting confirmation, ${escalatedCount} escalated to a human.${confirmNote}`
     );
   }
 
@@ -158,6 +220,106 @@ app.command("/go-ooo", async ({ command, ack, say, client }) => {
   await ack();
   console.log(`[index.js] /go-ooo triggered by ${command.user_id}`);
   await runNegotiationFlow(command.user_id, say, client, command.channel_id);
+});
+
+// --- Manual confirm gate (interim, until B's confirmListener.js exists) ---
+// This is a real, working confirmation step — not a stub — it's just
+// command-based instead of reaction-based. Swapping in confirmListener.js
+// later means replacing these two commands with a reaction_added listener
+// that calls the same stateStore.confirmPendingNegotiation/rejectPendingNegotiation
+// functions, so nothing else needs to change.
+app.command("/confirm-reassign", async ({ command, ack, say }) => {
+  await ack();
+  const taskId = command.text.trim();
+  if (!taskId) {
+    await say("Usage: `/confirm-reassign <taskId>`");
+    return;
+  }
+  const pending = stateStore.getPendingNegotiation(taskId);
+  if (!pending) {
+    await say(`No pending negotiation found for task \`${taskId}\`.`);
+    return;
+  }
+  // Authorization: only the proposed new owner can confirm — this is them
+  // agreeing to take the task, so it can't be done on their behalf.
+  if (command.user_id !== pending.finalOwner) {
+    await say(`Only <@${pending.finalOwner}> can confirm this reassignment.`);
+    return;
+  }
+  const task = stateStore.confirmPendingNegotiation(taskId);
+  await say(`:white_check_mark: Confirmed — "${task.title}" is now owned by <@${pending.finalOwner}>.`);
+});
+
+app.command("/reject-reassign", async ({ command, ack, say }) => {
+  await ack();
+  const taskId = command.text.trim();
+  if (!taskId) {
+    await say("Usage: `/reject-reassign <taskId>`");
+    return;
+  }
+  const pending = stateStore.getPendingNegotiation(taskId);
+  if (!pending) {
+    await say(`No pending negotiation found for task \`${taskId}\`.`);
+    return;
+  }
+  // Authorization: either the proposed new owner (declining) or the original
+  // OOO person (cancelling) can reject — nobody else.
+  if (command.user_id !== pending.finalOwner && command.user_id !== pending.fromUserId) {
+    await say(`Only <@${pending.finalOwner}> or <@${pending.fromUserId}> can reject this reassignment.`);
+    return;
+  }
+  stateStore.rejectPendingNegotiation(taskId);
+  await say(`:x: Rejected — task \`${taskId}\` was not reassigned. It stays with the original owner for now.`);
+});
+
+// --- Loose end fix: escalated tasks used to vanish after the initial
+// announcement, with no way to find them later. These three commands close
+// that gap: list them, manually resolve one, and let someone come back from OOO. ---
+
+app.command("/escalated", async ({ ack, say }) => {
+  await ack();
+  const escalated = stateStore.getAllEscalatedNegotiations();
+  if (escalated.length === 0) {
+    await say("No escalated tasks right now.");
+    return;
+  }
+  const lines = escalated.map((e) => `• \`${e.taskId}\` (from <@${e.fromUserId}>) — no candidate accepted, needs manual assignment`);
+  await say(`:rotating_light: *Escalated tasks awaiting manual assignment:*\n${lines.join("\n")}\n\nUse \`/resolve-escalation <taskId> <@user>\` to assign one.`);
+});
+
+app.command("/resolve-escalation", async ({ command, ack, say }) => {
+  await ack();
+  const [taskId, rawUser] = command.text.trim().split(/\s+/);
+  const userIdMatch = rawUser ? rawUser.match(/<@([A-Z0-9]+)(\|[^>]+)?>/) : null;
+  const toUserId = userIdMatch ? userIdMatch[1] : rawUser;
+
+  if (!taskId || !toUserId) {
+    await say("Usage: `/resolve-escalation <taskId> <@user>`");
+    return;
+  }
+  const task = stateStore.resolveEscalation(taskId, toUserId);
+  if (!task) {
+    await say(`Could not resolve escalation for \`${taskId}\` — check the task ID and that <@${toUserId}> is a known user.`);
+    return;
+  }
+  await say(`:white_check_mark: "${task.title}" manually assigned to <@${toUserId}>.`);
+});
+
+app.command("/back-from-ooo", async ({ command, ack, say }) => {
+  await ack();
+  const userId = command.user_id;
+  const stillPending = stateStore.hasPendingNegotiations(userId);
+  const stillEscalated = stateStore.getAllEscalatedNegotiations().some((e) => e.fromUserId === userId);
+
+  stateStore.markActive(userId);
+
+  if (stillPending || stillEscalated) {
+    await say(
+      `Welcome back — marked you active again. Heads up: you still have ${stillPending ? "pending confirmation(s)" : ""}${stillPending && stillEscalated ? " and " : ""}${stillEscalated ? "escalated task(s)" : ""} outstanding.`
+    );
+  } else {
+    await say(`Welcome back — marked you active again.`);
+  }
 });
 
 // --- Trigger 2: message-based overload/OOO signal detection ---
