@@ -10,14 +10,13 @@ require("dotenv").config();
 const { App } = require("@slack/bolt");
 const { negotiate } = require("./negotiationEngine");
 const { classifyOOOSignal, extractCommitments } = require("./extraction");
+const stateStore = require("./stateStore");
+const candidateSelector = require("./candidateSelector");
 
-// --- Day 1 stubs (see BUILD_PLAN.md Section 4: Fallback rules) ---
-// Replace these requires with N's real modules once delivered.
-const {
-  getMockOOOPerson,
-  getMockCandidatesByTask,
-  getMockPersonStatesById,
-} = require("./mockData");
+// Last-resort fallback only — used if stateStore/candidateSelector throw.
+// N's real modules, if delivered later, are a drop-in swap for stateStore.js
+// and candidateSelector.js above; nothing else needs to change.
+const { getMockOOOPerson, getMockCandidatesByTask } = require("./mockData");
 
 // TODO(B): replace with real src/canvasRenderer.js — renderTrace(trace) -> posts/updates a Canvas
 function stubRenderTrace(trace) {
@@ -61,31 +60,66 @@ async function fetchRecentUserMessages(client, channelId, userId, limit = 50) {
  * selection -> negotiation -> canvas update -> confirm listener.
  */
 async function runNegotiationFlow(oooUserId, say, client, channelId) {
-  // Day 2+: const oooPerson = await stateStore.getPersonState(oooUserId);
-  const oooPerson = getMockOOOPerson();
-  const personStatesById = getMockPersonStatesById();
+  // Get or create this person's real state, and mark them OOO.
+  let oooPerson;
+  try {
+    let displayName;
+    if (client) {
+      try {
+        const info = await client.users.info({ user: oooUserId });
+        displayName = info.user?.real_name || info.user?.name;
+      } catch (err) {
+        console.warn("[index.js] Could not fetch user display name:", err.message);
+      }
+    }
+    oooPerson = stateStore.markOOO(oooUserId, displayName);
+  } catch (err) {
+    console.warn("[index.js] stateStore.markOOO failed, falling back to mock person:", err.message);
+    oooPerson = getMockOOOPerson();
+  }
 
   // Try real extraction against the person's recent messages. Fall back to
-  // the mock person's openCommitments if GROQ_API_KEY is missing, the API
-  // call fails, or no messages/commitments are found — never let extraction
-  // block the demo (per BUILD_PLAN.md fallback principle).
+  // existing/mock commitments if GROQ_API_KEY is missing, the API call fails,
+  // or nothing is found — never let extraction block the demo.
   if (process.env.GROQ_API_KEY && client && channelId) {
     try {
-      const recentMessages = await fetchRecentUserMessages(client, channelId, oooUserId);
+      const recentMessages = await fetchRecentUserMessages(client, channelId, oooPerson.userId);
       if (recentMessages.length > 0) {
         const extracted = await extractCommitments(recentMessages, channelId);
         if (extracted.length > 0) {
-          oooPerson.openCommitments = extracted;
+          oooPerson = stateStore.setCommitments(oooPerson.userId, extracted);
           console.log(`[index.js] Extracted ${extracted.length} real commitment(s) via Groq for ${oooPerson.displayName}`);
         }
       }
     } catch (err) {
-      console.warn("[index.js] extractCommitments failed, falling back to mock commitments:", err.message);
+      console.warn("[index.js] extractCommitments failed, keeping existing commitments:", err.message);
     }
   }
 
-  // Day 2+: const candidatesByTask = await candidateSelector.selectCandidates(oooPerson);
-  const candidatesByTask = getMockCandidatesByTask();
+  // Demo safety net: if this person still has zero open commitments (fresh
+  // user, no Slack history, no GROQ_API_KEY set), seed them with the mock
+  // commitments so the negotiation flow always has something to demo.
+  if (!oooPerson.openCommitments || oooPerson.openCommitments.length === 0) {
+    const fallback = getMockOOOPerson();
+    oooPerson = stateStore.setCommitments(oooPerson.userId, fallback.openCommitments);
+    console.log("[index.js] No real commitments found, seeded mock commitments for demo purposes");
+  }
+
+  let personStatesById;
+  try {
+    personStatesById = stateStore.getAllPersonStatesById();
+  } catch (err) {
+    console.warn("[index.js] stateStore.getAllPersonStatesById failed, falling back to mock:", err.message);
+    personStatesById = require("./mockData").getMockPersonStatesById();
+  }
+
+  let candidatesByTask;
+  try {
+    candidatesByTask = candidateSelector.selectCandidates(oooPerson, personStatesById);
+  } catch (err) {
+    console.warn("[index.js] candidateSelector failed, falling back to mock candidates:", err.message);
+    candidatesByTask = getMockCandidatesByTask();
+  }
 
   console.log(`[index.js] Running negotiation flow for ${oooPerson.displayName} (${oooPerson.openCommitments.length} open commitments)`);
 
@@ -94,6 +128,17 @@ async function runNegotiationFlow(oooUserId, say, client, channelId) {
   for (const trace of traces) {
     stubRenderTrace(trace);
     stubListenForConfirm(trace);
+
+    // Apply the reassignment to the state store so load numbers stay accurate
+    // for future negotiations, even before B's confirmListener.js exists to
+    // gate this on an actual ✅ reaction.
+    if (trace.status === "pending_confirm" && trace.finalOwner) {
+      try {
+        stateStore.reassignCommitment(trace.taskId, oooPerson.userId, trace.finalOwner);
+      } catch (err) {
+        console.warn(`[index.js] Could not persist reassignment for ${trace.taskId}:`, err.message);
+      }
+    }
   }
 
   const resolvedCount = traces.filter((t) => t.status === "pending_confirm").length;
