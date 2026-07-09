@@ -1,0 +1,14 @@
+{
+  "name": "ooo-negotiation-agent",
+  "version": "1.0.0",
+  "description": "Per-person Slack agents that negotiate task reassignment when someone goes OOO or signals overload.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test:engine": "node test/negotiationEngine.test.js"
+  },
+  "dependencies": {
+    "@slack/bolt": "^3.17.1",
+    "dotenv": "^16.4.5"
+  }
+}

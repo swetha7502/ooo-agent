@@ -1,0 +1,50 @@
+{
+  "display_information": {
+    "name": "OOO Negotiation Agent",
+    "description": "Negotiates task reassignment between agents when someone goes OOO or signals overload.",
+    "background_color": "#2c2d30"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "ooo-negotiator",
+      "always_online": true
+    },
+    "slash_commands": [
+      {
+        "command": "/go-ooo",
+        "description": "Trigger OOO reassignment negotiation for yourself",
+        "usage_hint": " ",
+        "should_escape": false
+      }
+    ]
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:history",
+        "groups:history",
+        "chat:write",
+        "commands",
+        "reactions:read",
+        "reactions:write",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "message.channels",
+        "message.groups",
+        "reaction_added"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}
