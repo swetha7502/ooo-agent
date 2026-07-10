@@ -1,10 +1,7 @@
 // index.js
-// Owner: S. Bolt app entry point (Socket Mode), event wiring, orchestration.
-// Day 1: triggers fire correctly and run negotiationEngine against MOCK data.
-// Day 2+: swap mock calls for N's stateStore.js/candidateSelector.js and
-// B's canvasRenderer.js/confirmListener.js as they land — call signatures
-// below are written to match the frozen contracts exactly, so the swap
-// should be a one-line import change per module, not a rewrite.
+// Bolt app entry point (Socket Mode) — wires up the /go-ooo and message-based
+// triggers, and orchestrates the full flow: extraction -> candidate
+// selection -> negotiation -> posting the trace -> confirm listener.
 
 require("dotenv").config();
 const { App } = require("@slack/bolt");
@@ -15,9 +12,8 @@ const candidateSelector = require("./candidateSelector");
 const canvasRenderer = require("./canvasRenderer");
 const confirmListener = require("./confirmListener");
 
-// Last-resort fallback only — used if stateStore/candidateSelector throw.
-// N's real modules, if delivered later, are a drop-in swap for stateStore.js
-// and candidateSelector.js above; nothing else needs to change.
+// Last-resort fallback only, used if stateStore/candidateSelector throw for
+// any reason — keeps the demo running instead of crashing.
 const { getMockOOOPerson, getMockCandidatesByTask } = require("./mockData");
 
 // Last-resort fallback only — used if client/channelId aren't available
@@ -68,7 +64,7 @@ async function fetchRecentUserMessages(client, channelId, userId, limit = 50) {
 /**
  * Runs the full negotiation flow for a given OOO person and posts results.
  * This is the core orchestration path — trigger -> extraction -> candidate
- * selection -> negotiation -> canvas update -> confirm listener.
+ * selection -> negotiation -> posting the trace -> confirm listener.
  */
 async function runNegotiationFlow(oooUserId, say, client, channelId) {
   // Guard 1: cooldown — ignore rapid duplicate triggers for the same person.
@@ -160,6 +156,21 @@ async function runNegotiationFlow(oooUserId, say, client, channelId) {
 
   const traces = negotiate(oooPerson, candidatesByTask, personStatesById);
 
+  // Record pending/escalated state for every trace synchronously, right after
+  // negotiate() returns and before any Slack calls (rendering the trace can
+  // take a few seconds with the staggered messages). This closes the window
+  // where a second, near-simultaneous OOO trigger could run its own candidate
+  // selection before this run's picks are visible, and double-book the same
+  // candidate. Actually moving the task only ever happens once a human
+  // confirms — recording it as pending here does not reassign anything yet.
+  for (const trace of traces) {
+    if (trace.status === "pending_confirm" && trace.finalOwner) {
+      stateStore.addPendingNegotiation(trace, oooPerson.userId);
+    } else if (trace.status === "escalated") {
+      stateStore.addEscalatedNegotiation(trace, oooPerson.userId);
+    }
+  }
+
   for (const trace of traces) {
     const task = (oooPerson.openCommitments || []).find((t) => t.id === trace.taskId);
 
@@ -174,14 +185,7 @@ async function runNegotiationFlow(oooUserId, say, client, channelId) {
       stubRenderTrace(trace);
     }
 
-    // BUGFIX: previously this called stateStore.reassignCommitment() here,
-    // immediately, before anyone had actually confirmed anything — meaning
-    // the bot silently reassigned work with zero human consent. Correct
-    // behavior: record it as pending and wait for a real ✅ (reaction, via
-    // confirmListener.js, or manually via /confirm-reassign).
     if (trace.status === "pending_confirm" && trace.finalOwner) {
-      stateStore.addPendingNegotiation(trace, oooPerson.userId);
-
       if (client && channelId) {
         try {
           await confirmListener.postConfirmRequest(client, channelId, trace);
@@ -192,13 +196,6 @@ async function runNegotiationFlow(oooUserId, say, client, channelId) {
       } else {
         stubListenForConfirm(trace);
       }
-    }
-
-    // Loose end fix: escalated traces used to just get announced once and
-    // then vanish — no way to find them later. Now persisted so /escalated
-    // can list them and /resolve-escalation can act on them.
-    if (trace.status === "escalated") {
-      stateStore.addEscalatedNegotiation(trace, oooPerson.userId);
     }
   }
 
@@ -222,12 +219,9 @@ app.command("/go-ooo", async ({ command, ack, say, client }) => {
   await runNegotiationFlow(command.user_id, say, client, command.channel_id);
 });
 
-// --- Manual confirm gate (interim, until B's confirmListener.js exists) ---
-// This is a real, working confirmation step — not a stub — it's just
-// command-based instead of reaction-based. Swapping in confirmListener.js
-// later means replacing these two commands with a reaction_added listener
-// that calls the same stateStore.confirmPendingNegotiation/rejectPendingNegotiation
-// functions, so nothing else needs to change.
+// --- Manual confirm/reject commands — a command-based alternative to the
+// reaction-based flow in confirmListener.js, in case reactions aren't
+// convenient during the demo. ---
 app.command("/confirm-reassign", async ({ command, ack, say }) => {
   await ack();
   const taskId = command.text.trim();
@@ -272,9 +266,8 @@ app.command("/reject-reassign", async ({ command, ack, say }) => {
   await say(`:x: Rejected — task \`${taskId}\` was not reassigned. It stays with the original owner for now.`);
 });
 
-// --- Loose end fix: escalated tasks used to vanish after the initial
-// announcement, with no way to find them later. These three commands close
-// that gap: list them, manually resolve one, and let someone come back from OOO. ---
+// --- Commands for handling escalated tasks and returning from OOO: list
+// escalated tasks, manually resolve one, and mark yourself active again. ---
 
 app.command("/escalated", async ({ ack, say }) => {
   await ack();
@@ -287,16 +280,43 @@ app.command("/escalated", async ({ ack, say }) => {
   await say(`:rotating_light: *Escalated tasks awaiting manual assignment:*\n${lines.join("\n")}\n\nUse \`/resolve-escalation <taskId> <@user>\` to assign one.`);
 });
 
+/**
+ * Resolve a /resolve-escalation user argument to a userId. Prefers a real
+ * Slack mention (<@U123>), but Slack's slash-command text field doesn't
+ * reliably convert @mentions into that format the way a regular message
+ * does — even when picked from the autocomplete dropdown, the raw text can
+ * still show up as literal "@displayname". So fall back to matching the
+ * plain name (with or without a leading @) against known people in
+ * stateStore, case-insensitively.
+ */
+function resolveEscalationUser(rawUser) {
+  if (!rawUser) return null;
+
+  const mentionMatch = rawUser.match(/<@([A-Z0-9]+)(\|[^>]+)?>/);
+  if (mentionMatch) return mentionMatch[1];
+
+  const plain = rawUser.replace(/^@/, "").trim().toLowerCase();
+  const match = stateStore
+    .getAllPersonStates()
+    .find((p) => p.userId.toLowerCase() === plain || (p.displayName || "").toLowerCase() === plain);
+  return match ? match.userId : null;
+}
+
 app.command("/resolve-escalation", async ({ command, ack, say }) => {
   await ack();
   const [taskId, rawUser] = command.text.trim().split(/\s+/);
-  const userIdMatch = rawUser ? rawUser.match(/<@([A-Z0-9]+)(\|[^>]+)?>/) : null;
-  const toUserId = userIdMatch ? userIdMatch[1] : rawUser;
 
-  if (!taskId || !toUserId) {
+  if (!taskId || !rawUser) {
     await say("Usage: `/resolve-escalation <taskId> <@user>`");
     return;
   }
+
+  const toUserId = resolveEscalationUser(rawUser);
+  if (!toUserId) {
+    await say("Couldn't find that user — use an @mention like `@jordan`, or their exact display name.");
+    return;
+  }
+
   const task = stateStore.resolveEscalation(taskId, toUserId);
   if (!task) {
     await say(`Could not resolve escalation for \`${taskId}\` — check the task ID and that <@${toUserId}> is a known user.`);

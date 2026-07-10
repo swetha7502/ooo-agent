@@ -1,14 +1,8 @@
 // canvasRenderer.js
-// Built by S as B's fallback (B unavailable) — matches the contract B owned:
-// "renders NegotiationTrace visualization." Deliberately built as staggered
-// THREADED MESSAGES rather than Slack's Canvas API: Canvas would need a
-// canvases:write scope and behavior I can't verify end-to-end without live
-// Slack access, and BUILD_PLAN.md's own fallback rule explicitly sanctions
-// "post the negotiation trace as plain Slack messages instead of a Canvas —
-// less polished, but the demo still tells the full story." This is that
-// fallback, built to actually be demo-ready rather than a stub — this is
-// also the piece that makes the negotiation VISIBLE, which is the entire
-// reason this idea beat Crisis Coordinator, so it's worth it being real.
+// Renders a NegotiationTrace as a threaded sequence of staggered Slack
+// messages — a "negotiation trace" / activity log, not Slack's actual Canvas
+// API. Keeping it to plain postMessage calls avoids needing a canvases:write
+// scope, and it's what actually makes a negotiation visible during a demo.
 
 const EVENT_EMOJI = {
   propose: ":speech_balloon:",
@@ -30,7 +24,7 @@ function sleep(ms) {
  *
  * @param {object} client - Bolt/Slack WebClient (from the event/command handler)
  * @param {string} channelId
- * @param {object} trace - NegotiationTrace (see BUILD_PLAN.md contract)
+ * @param {object} trace - NegotiationTrace
  * @param {object} [task] - matching openCommitments entry, for a readable title
  * @returns {object} the header message result (has .ts, useful for threading further)
  */

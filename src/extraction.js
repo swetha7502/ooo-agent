@@ -1,9 +1,6 @@
 // extraction.js
-// Owner: S. Reuses the Crisis Coordinator extraction pipeline pattern (Groq API,
-// OpenAI-compatible format), swapped from "resource needs/offers" to
-// "commitments + priority" — the shape N's PersonState.openCommitments expects.
-//
-// Two jobs:
+// Talks to Groq's OpenAI-compatible chat completions API (llama-3.3-70b) for
+// two jobs:
 //   1. classifyOOOSignal(messageText) -> does this message indicate the person
 //      is going OOO or is overloaded? Backs up (doesn't replace) the keyword
 //      regex in index.js, since regex alone misses phrasing like

@@ -31,8 +31,8 @@ for (const trace of traces) {
 const task001 = traces.find((t) => t.taskId === "task_001");
 const task002 = traces.find((t) => t.taskId === "task_002");
 
-console.assert(task001.status === "pending_confirm", "task_001 should resolve (Sam is over threshold but high priority bump applies)");
-console.assert(task001.finalOwner === "U_SAM", "task_001 should go to Sam via priority bump");
+console.assert(task001.status === "pending_confirm", "task_001 should resolve (Swetha is over threshold but high priority bump applies)");
+console.assert(task001.finalOwner === "U0BGPN518DA", "task_001 should go to Swetha via priority bump");
 console.assert(task002.status === "escalated", "task_002 should escalate (Alex is over threshold, task is low priority, no other candidates)");
 
 console.log("Smoke test assertions passed (see above for full trace).\n");

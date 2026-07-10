@@ -1,7 +1,8 @@
 // negotiationEngine.js
-// Owner: S. Pure logic, zero Slack/network dependencies -> fully unit-testable
-// standalone (per BUILD_PLAN.md Day 1). Consumes PersonState + ReassignmentCandidate,
-// produces NegotiationEvent[] and a NegotiationTrace per task, per the frozen contracts.
+// Pure decision logic for reassignment negotiation — no Slack or network
+// calls, so it's fully unit-testable on its own. Consumes a PersonState and
+// ReassignmentCandidate list, produces NegotiationEvent[] and a
+// NegotiationTrace per task.
 //
 // Rule set is intentionally simple and DETERMINISTIC (not LLM-generated) so the
 // live demo never produces a surprise outcome:
@@ -16,7 +17,7 @@
 
 const LOAD_THRESHOLD = 3; // currentLoad strictly below this = normal capacity
 const PRIORITY_BUMP = 1; // high-priority tasks can push a candidate 1 unit over threshold
-const MAX_ROUNDS = 3; // hard cap on negotiation rounds per task (per BUILD_PLAN.md)
+const MAX_ROUNDS = 3; // hard cap on negotiation rounds per task
 
 /**
  * Decide whether a candidate accepts a given task, using the two-variable rule.
@@ -91,7 +92,7 @@ function negotiateTask(oooPerson, task, candidateList, personStatesById) {
         timestamp: new Date().toISOString(),
       });
       finalOwner = candidate.userId;
-      status = "pending_confirm"; // handed off to B's confirmListener.js for ✅/❌
+      status = "pending_confirm"; // awaits human confirmation via confirmListener.js
       break;
     } else {
       events.push({

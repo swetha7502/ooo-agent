@@ -1,13 +1,10 @@
 // mockData.js
-// Hardcoded fake data matching the frozen PersonState + ReassignmentCandidate
-// contracts (see BUILD_PLAN.md). Used so S can build and test negotiationEngine.js
-// and index.js without waiting on N's stateStore.js / candidateSelector.js.
-//
-// Swap rule: once N's real modules land, replace calls to these mock functions
-// with calls to N's exports. Nothing downstream (negotiationEngine, index.js)
-// should need to change, since the shape is identical.
+// Hardcoded fake data matching the PersonState + ReassignmentCandidate
+// shapes. Used to exercise negotiationEngine.js and index.js, and as a
+// fallback when real Slack/API data isn't available (e.g. no GROQ_API_KEY
+// set, or a fresh user with no tracked commitments yet).
 
-// --- Mock PersonState objects (normally owned by N's stateStore.js) ---
+// --- Mock PersonState objects (normally sourced from stateStore.js) ---
 const mockPeople = {
   U_PRIYA: {
     userId: "U_PRIYA",
@@ -31,16 +28,16 @@ const mockPeople = {
     ],
     currentLoad: 3,
   },
-  U_JORDAN: {
-    userId: "U_JORDAN",
-    displayName: "Jordan",
+  U0BHE8YRQ9E: {
+    userId: "U0BHE8YRQ9E",
+    displayName: "bgk02",
     status: "active",
     openCommitments: [],
     currentLoad: 2, // under threshold -> should accept
   },
-  U_SAM: {
-    userId: "U_SAM",
-    displayName: "Sam",
+  U0BGPN518DA: {
+    userId: "U0BGPN518DA",
+    displayName: "Swetha Sriram",
     status: "active",
     openCommitments: [],
     currentLoad: 4, // over threshold -> only accepts high priority (bump)
@@ -54,14 +51,14 @@ const mockPeople = {
   },
 };
 
-// --- Mock ReassignmentCandidate objects (normally owned by N's candidateSelector.js) ---
+// --- Mock ReassignmentCandidate objects (normally sourced from candidateSelector.js) ---
 // Keyed by taskId, ordered by confidence desc (highest confidence tried first).
 const mockCandidatesByTask = {
   task_001: {
     taskId: "task_001",
     candidates: [
-      { userId: "U_SAM", displayName: "Sam", confidence: 0.8, reason: "past PR reviewer on this repo" },
-      { userId: "U_JORDAN", displayName: "Jordan", confidence: 0.6, reason: "same team, lighter load" },
+      { userId: "U0BGPN518DA", displayName: "Swetha Sriram", confidence: 0.8, reason: "past PR reviewer on this repo" },
+      { userId: "U0BHE8YRQ9E", displayName: "bgk02", confidence: 0.6, reason: "same team, lighter load" },
     ],
   },
   task_002: {

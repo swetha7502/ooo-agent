@@ -45,12 +45,12 @@ const escalatedList = stateStore.getAllEscalatedNegotiations();
 console.log(escalatedList.map((e) => e.taskId));
 console.assert(escalatedList.some((e) => e.taskId === "task_002"), "escalated task should be listed");
 
-console.log("\n=== Step 3: /resolve-escalation task_002 U_JORDAN ===");
-const resolved = stateStore.resolveEscalation("task_002", "U_JORDAN");
+console.log("\n=== Step 3: /resolve-escalation task_002 U0BHE8YRQ9E ===");
+const resolved = stateStore.resolveEscalation("task_002", "U0BHE8YRQ9E");
 console.log(`Resolved task: ${resolved && resolved.title}`);
 console.assert(resolved !== null, "resolveEscalation should succeed");
 
-const jordanAfter = stateStore.getPersonState("U_JORDAN");
+const jordanAfter = stateStore.getPersonState("U0BHE8YRQ9E");
 const priyaAfter = stateStore.getPersonState("U_PRIYA");
 console.log(`Jordan now owns task_002: ${jordanAfter.openCommitments.some((c) => c.id === "task_002")}`);
 console.log(`Priya no longer owns task_002: ${!priyaAfter.openCommitments.some((c) => c.id === "task_002")}`);

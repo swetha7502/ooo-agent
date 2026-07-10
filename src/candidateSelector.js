@@ -1,17 +1,17 @@
 // candidateSelector.js
-// Built by S as a working fallback while N is unavailable until Sunday — per
-// BUILD_PLAN.md's fallback principle. Matches N's owned contract exactly
-// (ReassignmentCandidate). Simple, deterministic version per the plan
-// ("start with a simple version (keyword/channel-history match), add RTS API
-// lookup only if time allows") — no RTS lookup here; that's the natural
-// next step for N to bolt on if there's time.
-//
-// Scoring is deterministic on purpose (same rationale as negotiationEngine.js):
-// a live demo should never produce a surprise. Two signals, blended:
+// Picks the best candidate(s) to take over a task. Scoring is deterministic
+// on purpose (same rationale as negotiationEngine.js): a live demo should
+// never produce a surprise. Two signals, blended:
 //   - load: lower currentLoad -> higher score (weighted more heavily)
 //   - keyword overlap: task title words that also appear in the candidate's
 //     own current commitment titles -> small confidence boost ("related
 //     past work"), a cheap stand-in for real skill/history matching.
+//
+// Simple keyword/load match only — no Real-Time Search API lookup. That
+// could be layered on top later to strengthen candidate ranking, but isn't
+// needed for the negotiation flow to work.
+
+const stateStore = require("./stateStore");
 
 function tokenize(text) {
   return (text || "")
@@ -53,10 +53,16 @@ function scoreCandidate(task, candidateState) {
   return { confidence, reason };
 }
 
-/** All active (non-OOO) candidates for one task, best match first. */
+/**
+ * All active (non-OOO), non-held candidates for one task, best match first.
+ * Candidates who are the tentative finalOwner of another pending negotiation
+ * right now are skipped entirely — otherwise two negotiations running close
+ * together could both land on the same lightest-loaded candidate before
+ * either one gets confirmed, double-booking them.
+ */
 function selectCandidatesForTask(task, oooPerson, allPersonStates, maxCandidates = 3) {
   const pool = allPersonStates.filter(
-    (p) => p.userId !== oooPerson.userId && p.status !== "ooo"
+    (p) => p.userId !== oooPerson.userId && p.status !== "ooo" && !stateStore.isCandidateHeld(p.userId)
   );
 
   const scored = pool.map((p) => {

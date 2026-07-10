@@ -41,7 +41,7 @@ async function main() {
   const trace = {
     taskId: "task_001",
     status: "pending_confirm",
-    finalOwner: "U_SAM",
+    finalOwner: "U0BGPN518DA",
     events: [
       { type: "propose", fromAgent: "Priya's Agent", toAgent: "Sam's Agent", message: "Proposing Sam take it" },
       { type: "accept", fromAgent: "Sam's Agent", toAgent: "Priya's Agent", message: "Sam accepts" },
@@ -85,11 +85,11 @@ async function main() {
 
   // --- Test 4: correct user's ✅ actually confirms it ---
   await mockApp._handler({
-    event: { reaction: "white_check_mark", user: "U_SAM", item: { type: "message", channel: "C123", ts: confirmMsg.ts } },
+    event: { reaction: "white_check_mark", user: "U0BGPN518DA", item: { type: "message", channel: "C123", ts: confirmMsg.ts } },
     client,
   });
   const pendingAfterRealConfirm = stateStore.getPendingNegotiation("task_001");
-  const samAfter = stateStore.getPersonState("U_SAM");
+  const samAfter = stateStore.getPersonState("U0BGPN518DA");
   console.log("\n=== Test 4: authorized confirm (Sam) resolves it ===");
   console.log(`Pending cleared: ${pendingAfterRealConfirm === null}`);
   console.log(`Sam now owns task_001: ${samAfter.openCommitments.some((c) => c.id === "task_001")}`);

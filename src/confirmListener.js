@@ -1,16 +1,14 @@
 // confirmListener.js
-// Built by S as B's fallback (B unavailable) — matches the contract B owned:
-// "reaction listener + short fake timeout (30–60 sec for demo, not real
-// scheduling)." This is a real, working reaction-based confirm/reject flow,
-// not a stub — it's a genuine alternative to (not a replacement for) the
-// manual /confirm-reassign and /reject-reassign commands in index.js; having
-// both gives the demo two ways to confirm in case one has issues live.
+// Reaction-based confirm/reject flow for a resolved negotiation: posts a
+// ✅/❌ prompt, listens for reaction_added, and auto-escalates via a short
+// fake timeout if nobody reacts. Runs alongside the manual /confirm-reassign
+// and /reject-reassign commands in index.js as a second way to confirm.
 
 const stateStore = require("./stateStore");
 
 const CONFIRM_EMOJI = "white_check_mark";
 const REJECT_EMOJI = "x";
-const FAKE_TIMEOUT_MS = 45 * 1000; // within BUILD_PLAN.md's 30–60s window
+const FAKE_TIMEOUT_MS = 45 * 1000; // fake timeout for demo purposes, not real scheduling
 
 // taskId -> Timeout handle, so a real confirm/reject can cancel the fake timeout.
 const pendingTimeouts = new Map();
@@ -47,7 +45,28 @@ async function postConfirmRequest(client, channelId, trace) {
     if (!stillPending) return; // already confirmed or rejected in the meantime
 
     stateStore.rejectPendingNegotiation(trace.taskId);
-    stateStore.addEscalatedNegotiation(trace, stillPending.fromUserId);
+
+    // The original trace still says "pending_confirm" with the offered
+    // candidate as finalOwner — neither is true anymore once this times out,
+    // so record what actually happened instead of the stale in-flight state.
+    const escalatedTrace = {
+      ...trace,
+      status: "escalated",
+      finalOwner: null,
+      events: [
+        ...trace.events,
+        {
+          taskId: trace.taskId,
+          round: trace.events.length + 1,
+          type: "escalate",
+          fromAgent: `${trace.finalOwner}'s Agent`,
+          toAgent: "Human",
+          message: `No confirmation within ${FAKE_TIMEOUT_MS / 1000}s — auto-escalating to a human.`,
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    };
+    stateStore.addEscalatedNegotiation(escalatedTrace, stillPending.fromUserId);
 
     try {
       await client.chat.postMessage({

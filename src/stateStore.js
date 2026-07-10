@@ -1,11 +1,7 @@
 // stateStore.js
-// Built by S as a working fallback while N is unavailable until Sunday — per
-// BUILD_PLAN.md's fallback principle. Matches N's owned contract exactly
-// (PersonState), so if N delivers a real version later, swapping it in is a
-// drop-in replacement: same function names, same shapes, zero rework upstream.
-//
-// Simple JSON-file persistence (per BUILD_PLAN.md: "in-memory or simple JSON
-// storage") so state survives a restart during the demo without needing a DB.
+// Tracks each person's OOO status, open commitments, and current workload.
+// Simple JSON-file persistence so state survives a restart during a demo
+// without needing a real database.
 
 const fs = require("fs");
 const path = require("path");
@@ -13,21 +9,19 @@ const path = require("path");
 const DATA_FILE = path.join(__dirname, "..", "data", "people.json");
 
 // Seed people so candidateSelector.js has someone real to negotiate with even
-// before every teammate has posted in Slack. Replace userIds with real Slack
-// user IDs (e.g. via `/who-am-i` or your workspace admin page) when ready —
-// nothing downstream depends on the IDs being fake.
+// before every teammate has posted in Slack.
 function seedPeople() {
   return {
-    U_JORDAN: {
-      userId: "U_JORDAN",
-      displayName: "Jordan",
+    U0BHE8YRQ9E: {
+      userId: "U0BHE8YRQ9E",
+      displayName: "bgk02",
       status: "active",
       openCommitments: [],
       currentLoad: 2,
     },
-    U_SAM: {
-      userId: "U_SAM",
-      displayName: "Sam",
+    U0BGPN518DA: {
+      userId: "U0BGPN518DA",
+      displayName: "Swetha Sriram",
       status: "active",
       openCommitments: [],
       currentLoad: 4,
@@ -171,6 +165,18 @@ function hasPendingNegotiations(userId) {
   return getAllPendingNegotiations().some((p) => p.fromUserId === userId);
 }
 
+/**
+ * Whether a candidate is currently the tentative (unconfirmed) finalOwner of
+ * any pending negotiation — i.e. holding a task offer open. Prevents a second,
+ * near-simultaneous negotiation from picking the same candidate before either
+ * one has been confirmed. The hold is released automatically once the
+ * pending entry is cleared, via confirmPendingNegotiation or
+ * rejectPendingNegotiation (reject, or the confirm-listener timeout).
+ */
+function isCandidateHeld(userId) {
+  return getAllPendingNegotiations().some((p) => p.finalOwner === userId);
+}
+
 /** Attach the Slack message ref (channel + ts) that a pending negotiation's confirm prompt was posted as, so reaction_added can look it up. */
 function setPendingNegotiationMessageRef(taskId, channel, ts) {
   const pending = loadPending();
@@ -262,6 +268,7 @@ module.exports = {
   getPendingNegotiation,
   getAllPendingNegotiations,
   hasPendingNegotiations,
+  isCandidateHeld,
   setPendingNegotiationMessageRef,
   findPendingNegotiationByMessage,
   confirmPendingNegotiation,
