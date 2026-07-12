@@ -36,7 +36,7 @@ function evaluateCandidate(task, candidateState) {
     return { accepted: true, reasonNote: `load ${currentLoad} is under threshold (${LOAD_THRESHOLD})` };
   }
 
-  if (task.priority === "high" && currentLoad <= LOAD_THRESHOLD + PRIORITY_BUMP) {
+  if (String(task.priority).toLowerCase() === "high" && currentLoad <= LOAD_THRESHOLD + PRIORITY_BUMP) {
     return {
       accepted: true,
       reasonNote: `load ${currentLoad} exceeds threshold but task is high priority (bump allows up to ${LOAD_THRESHOLD + PRIORITY_BUMP})`,

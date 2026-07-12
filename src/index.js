@@ -132,7 +132,16 @@ async function runNegotiationFlow(oooUserId, say, client, channelId) {
   // commitments so the negotiation flow always has something to demo.
   if (!oooPerson.openCommitments || oooPerson.openCommitments.length === 0) {
     const fallback = getMockOOOPerson();
-    oooPerson = stateStore.setCommitments(oooPerson.userId, fallback.openCommitments);
+    // Namespace the mock task ids per user: pending/escalated records are keyed
+    // by taskId, so two commitment-less users going OOO must not share ids.
+    // Use a readable display-name slug (single word — task ids get typed as
+    // slash-command arguments), falling back to the raw userId.
+    const slug = (oooPerson.displayName || oooPerson.userId)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || oooPerson.userId;
+    const seeded = fallback.openCommitments.map((t) => ({ ...t, id: `${t.id}_${slug}` }));
+    oooPerson = stateStore.setCommitments(oooPerson.userId, seeded);
     console.log("[index.js] No real commitments found, seeded mock commitments for demo purposes");
   }
 
@@ -190,8 +199,32 @@ async function runNegotiationFlow(oooUserId, say, client, channelId) {
         try {
           await confirmListener.postConfirmRequest(client, channelId, trace);
         } catch (err) {
-          console.warn(`[index.js] confirmListener.postConfirmRequest failed for ${trace.taskId}, falling back to console log:`, err.message);
-          stubListenForConfirm(trace);
+          console.warn(`[index.js] confirmListener.postConfirmRequest failed for ${trace.taskId}, escalating instead:`, err.message);
+          // If the ✅/❌ prompt couldn't be posted (e.g. bot not in the
+          // channel), nobody can ever confirm AND no timeout timer was set —
+          // the pending entry would be stranded forever and block re-triggers.
+          // Escalate it immediately instead, mirroring what the timeout does.
+          stateStore.rejectPendingNegotiation(trace.taskId);
+          stateStore.addEscalatedNegotiation(
+            {
+              ...trace,
+              status: "escalated",
+              finalOwner: null,
+              events: [
+                ...trace.events,
+                {
+                  taskId: trace.taskId,
+                  round: trace.events.length + 1,
+                  type: "escalate",
+                  fromAgent: `${oooPerson.displayName}'s Agent`,
+                  toAgent: "Human",
+                  message: `Couldn't post the confirmation prompt (${err.message}) — escalating to a human.`,
+                  timestamp: new Date().toISOString(),
+                },
+              ],
+            },
+            oooPerson.userId
+          );
         }
       } else {
         stubListenForConfirm(trace);
@@ -212,10 +245,35 @@ async function runNegotiationFlow(oooUserId, say, client, channelId) {
   return traces;
 }
 
+/**
+ * Slash commands arrive even for channels the bot isn't a member of, but
+ * chat.postMessage there fails with not_in_channel — the whole flow then
+ * half-runs invisibly. Detect that up front with a cheap history read.
+ * Only a definite "not a member" answer blocks; any other error lets the
+ * flow proceed and rely on its own fallbacks.
+ */
+async function botCanPostHere(client, channelId) {
+  try {
+    await client.conversations.history({ channel: channelId, limit: 1 });
+    return true;
+  } catch (err) {
+    const code = err.data?.error;
+    return code !== "not_in_channel" && code !== "channel_not_found";
+  }
+}
+
 // --- Trigger 1: explicit slash command, e.g. /go-ooo ---
-app.command("/go-ooo", async ({ command, ack, say, client }) => {
+app.command("/go-ooo", async ({ command, ack, say, respond, client }) => {
   await ack();
   console.log(`[index.js] /go-ooo triggered by ${command.user_id}`);
+  if (!(await botCanPostHere(client, command.channel_id))) {
+    console.log(`[index.js] Bot is not in channel ${command.channel_id}, asking for an invite`);
+    await respond({
+      response_type: "ephemeral",
+      text: ":wave: I'm not in this channel yet, so I can't post the negotiation here. Run `/invite @ooo-negotiator` in this channel first, then try `/go-ooo` again.",
+    });
+    return;
+  }
   await runNegotiationFlow(command.user_id, say, client, command.channel_id);
 });
 
@@ -241,6 +299,10 @@ app.command("/confirm-reassign", async ({ command, ack, say }) => {
     return;
   }
   const task = stateStore.confirmPendingNegotiation(taskId);
+  if (!task) {
+    await say(`Couldn't complete the reassignment for \`${taskId}\` — the task no longer exists with its original owner. It stays pending; use \`/reject-reassign ${taskId}\` to clear it.`);
+    return;
+  }
   await say(`:white_check_mark: Confirmed — "${task.title}" is now owned by <@${pending.finalOwner}>.`);
 });
 
@@ -304,7 +366,11 @@ function resolveEscalationUser(rawUser) {
 
 app.command("/resolve-escalation", async ({ command, ack, say }) => {
   await ack();
-  const [taskId, rawUser] = command.text.trim().split(/\s+/);
+  // Only the first token is the taskId — everything after it is the user, so
+  // multi-word display names like "Swetha Sriram" survive intact.
+  const trimmed = command.text.trim();
+  const taskId = trimmed.split(/\s+/)[0];
+  const rawUser = trimmed.slice(taskId.length).trim();
 
   if (!taskId || !rawUser) {
     await say("Usage: `/resolve-escalation <taskId> <@user>`");

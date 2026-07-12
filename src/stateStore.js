@@ -44,10 +44,23 @@ function ensureDataFile() {
   }
 }
 
+// If a data file is corrupted (crash mid-write, hand-editing), reset it to a
+// fallback instead of throwing on every subsequent command until someone
+// deletes the file by hand. This is demo state, so losing it beats crashing.
+function safeParse(file, fallback) {
+  const raw = fs.readFileSync(file, "utf8");
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    console.warn(`[stateStore] ${path.basename(file)} is corrupted (${err.message}) — resetting it.`);
+    fs.writeFileSync(file, JSON.stringify(fallback, null, 2));
+    return fallback;
+  }
+}
+
 function loadAll() {
   ensureDataFile();
-  const raw = fs.readFileSync(DATA_FILE, "utf8");
-  return JSON.parse(raw);
+  return safeParse(DATA_FILE, seedPeople());
 }
 
 function saveAll(people) {
@@ -113,8 +126,12 @@ function reassignCommitment(taskId, fromUserId, toUserId) {
   const [task] = fromPerson.openCommitments.splice(idx, 1);
   toPerson.openCommitments = toPerson.openCommitments || [];
   toPerson.openCommitments.push(task);
-  toPerson.currentLoad = toPerson.openCommitments.length;
-  fromPerson.currentLoad = fromPerson.openCommitments.length;
+  // Shift load by one instead of recomputing from openCommitments.length —
+  // seeded people carry a fictional baseline load (untracked work) that a
+  // recompute would silently discard, flipping e.g. a load-5 persona to the
+  // lightest candidate after receiving a single tracked task.
+  toPerson.currentLoad = (toPerson.currentLoad ?? 0) + 1;
+  fromPerson.currentLoad = Math.max(0, (fromPerson.currentLoad ?? 0) - 1);
 
   saveAll(people);
   return task;
@@ -130,7 +147,7 @@ function ensurePendingFile() {
 
 function loadPending() {
   ensurePendingFile();
-  return JSON.parse(fs.readFileSync(PENDING_FILE, "utf8"));
+  return safeParse(PENDING_FILE, {});
 }
 
 function savePending(pending) {
@@ -199,6 +216,8 @@ function confirmPendingNegotiation(taskId) {
   if (!entry) return null;
 
   const task = reassignCommitment(taskId, entry.fromUserId, entry.finalOwner);
+  if (!task) return null; // reassign failed (task/users gone) — keep the pending entry so it isn't silently lost
+
   delete pending[taskId];
   savePending(pending);
   return task;
@@ -221,7 +240,7 @@ function ensureEscalatedFile() {
 
 function loadEscalated() {
   ensureEscalatedFile();
-  return JSON.parse(fs.readFileSync(ESCALATED_FILE, "utf8"));
+  return safeParse(ESCALATED_FILE, {});
 }
 
 function saveEscalated(escalated) {

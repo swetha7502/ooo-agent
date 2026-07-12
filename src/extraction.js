@@ -121,7 +121,9 @@ async function extractCommitments(messages, sourceChannel) {
   return parsed.map((item, i) => ({
     id: `task_${Date.now()}_${i}`,
     title: item.title,
-    priority: item.priority,
+    // The model is told to answer lowercase, but don't trust it: the engine
+    // compares priority === "high" strictly, so "High" would lose the bump.
+    priority: String(item.priority || "medium").toLowerCase(),
     dueDate: item.dueDate,
     sourceChannel,
   }));
