@@ -1,6 +1,6 @@
 # OOO Negotiation Agent
 
-![Thumbnail](pictures\Automated_Task_Reassignment_Negotiation_Agent.png)
+![Thumbnail](pictures/Automated_Task_Reassignment_Negotiation_Agent.png)
 
 Every team has that moment: someone goes OOO or just gets slammed, and their open tasks either sit untouched or get dumped on whoever happens to be free. We wanted Slack to handle that handoff itself, but not as one bot bossily reassigning work top-down. Instead, we built it as two agents negotiating on behalf of two people. The person going OOO has an agent proposing their tasks. The candidate teammate has an agent deciding whether to accept, based on their own actual workload. A human still has the final say, ✅ or ❌, before anything actually moves. When the OOO person's back, the bot flags whether anything's still pending or was left unassigned, and they can mention the bot directly to search the workspace live for anything they need to catch up on.
 
@@ -27,7 +27,7 @@ It's deployed and stays connected the whole time, nothing needs to be started or
 | `src/confirmListener.js` | Handles the ✅/❌ confirm flow, auto-escalates to a human after 45s of silence |
 | `src/index.js` | Bolt entry point — wires up every trigger and command below |
 
-![Architecture diagram](pictures\Autonomous_Task_Handoff_Protocol_Flow.png)
+![Architecture diagram](pictures/Autonomous_Task_Handoff_Protocol_Flow.png)
 
 ## Commands
 
