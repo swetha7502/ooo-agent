@@ -474,6 +474,11 @@ app.event("app_mention", async ({ event, client, say }) => {
       content_types: ["messages"],
     });
 
+    // TEMP DEBUG: the event payload shape already didn't match the docs
+    // once — verify the response shape empirically too before trusting
+    // result.results.messages. Remove once confirmed.
+    console.log("[DEBUG] assistant.search.context raw result:", JSON.stringify(result, null, 2));
+
     const matches = result.results?.messages || [];
     if (matches.length === 0) {
       await say(`:mag: No recent Slack messages found for "${query}".`);
