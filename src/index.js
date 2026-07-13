@@ -41,7 +41,7 @@ confirmListener.registerConfirmListener(app);
 // clobbering commitments that are already mid-negotiation. In-memory is fine
 // for a demo — resets on restart, which just re-opens the cooldown.
 const lastTriggeredAt = new Map();
-const COOLDOWN_MS = 3 * 60 * 1000; // 3 minutes
+const COOLDOWN_MS = 45 * 1000; // 45 seconds
 
 /**
  * Pulls a user's recent messages from a channel via conversations.history,
