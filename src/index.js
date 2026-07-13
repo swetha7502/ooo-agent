@@ -4,6 +4,7 @@
 // selection -> negotiation -> posting the trace -> confirm listener.
 
 require("dotenv").config();
+const http = require("http");
 const { App } = require("@slack/bolt");
 const { negotiate } = require("./negotiationEngine");
 const { classifyOOOSignal, extractCommitments } = require("./extraction");
@@ -442,5 +443,13 @@ app.message(async ({ message, say, client }) => {
   await app.start();
   console.log("⚡️ OOO Negotiation Agent is running (Socket Mode, Day 1 mock data)");
 })();
+
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("OOO Negotiation Agent is alive");
+}).listen(PORT, () => {
+  console.log(`[index.js] Health check server listening on port ${PORT}`);
+});
 
 module.exports = { app, runNegotiationFlow };
