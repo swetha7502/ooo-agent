@@ -1,182 +1,94 @@
 # OOO Negotiation Agent
 
-Per-person Slack agents that negotiate task reassignment when someone goes
-OOO or signals overload. Each side of a reassignment is represented by its
-own agent (the OOO person's agent proposes, the candidate's agent
-accepts/declines based on their own workload) — a human always confirms the
-final handoff before it's real.
+Every team has that moment: someone goes OOO or just gets slammed, and their open tasks either sit untouched or get dumped on whoever happens to be free. We wanted Slack to handle that handoff itself, but not as one bot bossily reassigning work top-down. Instead, we built it as two agents negotiating on behalf of two people. The person going OOO has an agent proposing their tasks. The candidate teammate has an agent deciding whether to accept, based on their own actual workload. A human still has the final say, ✅ or ❌, before anything actually moves. When the OOO person's back, the bot flags whether anything's still pending or was left unassigned, and they can mention the bot directly to search the workspace live for anything they need to catch up on.
+
+## Try it yourself — no setup needed
+
+The bot's already live, you just need to join and talk to it.
+
+1. Join the workspace: `[INSERT SLACK WORKSPACE INVITE LINK HERE]`
+2. Create your own channel (e.g. `#test-yourname`) instead of testing in a shared one — keeps your run clean from anyone else's in-progress test.
+3. Invite the bot in: `/invite @ooo-negotiator`
+4. Work through the checklist further down whenever you're ready.
+
+It's deployed and stays connected the whole time, nothing needs to be started or restarted on our end for you to try it.
 
 ## Architecture
 
-- `src/extraction.js` — Groq API (llama-3.3-70b) classifies OOO/overload
-  signals in messages and extracts structured open commitments.
-- `src/negotiationEngine.js` — pure, deterministic accept/counter/escalate
-  logic (no network calls), so a live demo never produces a surprise outcome.
-- `src/stateStore.js` — tracks each person's OOO status, open commitments,
-  and workload; simple JSON-file persistence.
-- `src/candidateSelector.js` — scores candidates by workload + keyword
-  overlap with their existing tasks; skips anyone currently holding another
-  unconfirmed offer (see "Known limitations" below).
-- `src/canvasRenderer.js` — renders a negotiation as a threaded sequence of
-  Slack messages (a "negotiation trace," not Slack's actual Canvas API).
-- `src/confirmListener.js` — ✅/❌ reaction-based confirm/reject flow, with a
-  45s fake timeout that auto-escalates to a human if nobody responds.
-- `src/index.js` — Bolt app entry point; wires up `/go-ooo` and message-based
-  triggers, orchestrates the flow, and provides manual
-  `/confirm-reassign`, `/reject-reassign`, `/escalated`, `/resolve-escalation`,
-  `/back-from-ooo` commands alongside the reaction-based confirm flow.
+| File | What it does |
+|---|---|
+| `src/extraction.js` | Calls Groq (llama-3.3-70b) to detect OOO/overload signals and pull structured tasks out of a message |
+| `src/negotiationEngine.js` | Pure, deterministic accept/counter/escalate logic — no network calls, no surprises in a live demo |
+| `src/stateStore.js` | Tracks each person's OOO status, open tasks, and workload |
+| `src/candidateSelector.js` | Scores candidates by workload + overlap with their existing tasks, skips anyone already holding another unconfirmed offer |
+| `src/canvasRenderer.js` | Renders a negotiation as a threaded sequence of messages (not Slack's actual Canvas API, despite the name) |
+| `src/confirmListener.js` | Handles the ✅/❌ confirm flow, auto-escalates to a human after 45s of silence |
+| `src/index.js` | Bolt entry point — wires up every trigger and command below |
 
-## Setup
+**Architecture diagram:** `[INSERT ARCHITECTURE DIAGRAM HERE]`
 
-1. `npm install`
-2. Create a `.env` file (gitignored) with:
+## Commands
+
+| Command | What it does |
+|---|---|
+| `/go-ooo` | Starts a negotiation for your open tasks |
+| `/confirm-reassign <taskId>` | Accepts a task offered to you |
+| `/reject-reassign <taskId>` | Declines a task offered to you |
+| `/escalated` | Lists tasks nobody accepted, still needing a human to assign |
+| `/resolve-escalation <taskId> <@user>` | Manually assigns an escalated task |
+| `/back-from-ooo` | Marks you active again and flags whether anything's still pending confirmation or unassigned |
+| `@ooo-negotiator <question>` | Searches the workspace live, see below |
+
+## Real-time search
+
+Mention the bot with a question and it searches the workspace live to help you decide who to reassign something to:
+
+```
+@ooo-negotiator who's discussed the onboarding document?
+```
+
+It comes back with up to 5 matching messages, each with a link straight to that message so you can jump right to it.
+
+## Local setup
+
+Only needed if you want to run your own copy.
+
+1. `git clone` this repo, then `npm install`
+2. Create a `.env` file with:
    ```
    GROQ_API_KEY=gsk_...
    SLACK_BOT_TOKEN=xoxb-...
    SLACK_APP_TOKEN=xapp-...
    ```
-3. Install the app into your Slack workspace using `app-manifest.json`
-   (Slack API dashboard → create app from manifest), then grab the bot token
-   and app-level token into `.env` above.
+3. Create a Slack app from `app-manifest.json`, install it, copy the bot token and app-level token into `.env`.
 4. `npm start`
 
-Demo state lives in `data/*.json` (gitignored, auto-created). Delete those
-files any time to reset to the seeded starting state — safe, nothing
-persists there that matters outside a single demo run.
+Demo data lives in `data/*.json`, delete it anytime to reset to a clean seeded state.
 
 ## Automated tests
 
-No test framework — plain Node scripts, run individually:
+Yep, we've got automated tests — see `test/` for the full suite.
 
-```
-node test/negotiationEngine.test.js   # negotiation accept/counter/escalate rules
-node test/confirmGate.test.js         # reassignment only happens after explicit confirm
-node test/escalation.test.js          # escalated tasks persist + /resolve-escalation
-node test/integration.test.js         # stateStore + candidateSelector + negotiationEngine together
-node test/bModules.test.js            # canvasRenderer + confirmListener against a mock Slack client
-node test/Extraction.test.js          # needs GROQ_API_KEY in .env, hits the real Groq API
-```
+## Manual test checklist
 
-All six should pass clean. Each backs up and restores `data/*.json` around
-itself, so they're safe to run against a live demo's data directory.
+Seed data assumes a fresh `data/` folder: `Bob` load 2, `Charlie` load 4, `Alex` (a placeholder account, no real Slack user behind it) load 5. Anyone new who triggers `/go-ooo`, a message trigger, or `/back-from-ooo` gets registered on the spot, no setup needed, so your own account will show up as its own person the moment you try any command. If you're testing after someone else already has, load numbers may look different, that's expected.
 
-## Manual live-sandbox testing
+**Solo**
 
-Unit tests don't touch real Slack. Once the bot is running
-(`npm start`) and connected (Socket Mode), work through this checklist. Seed
-data assumptions below are for a **fresh** `data/` directory (delete
-`data/*.json` and restart for predictable numbers): `bgk02` load 2, `Swetha
-Sriram` load 4, `Alex` (fake account, no real Slack user) load 5.
-`LOAD_THRESHOLD = 3`, `PRIORITY_BUMP = 1`, `COOLDOWN_MS = 3 min`,
-`FAKE_TIMEOUT_MS = 45s`.
+1. **`/go-ooo`** — starts a negotiation. If you have no tracked tasks, two mock ones get seeded for you. Expect: high-priority task offered to the lightest-loaded candidate, low-priority task escalates if nobody's under threshold. Ends with a summary line.
+2. **`/escalated`** — lists any tasks still needing manual assignment.
+3. **`/resolve-escalation <taskId> Alex`** — assigns an escalated task to a teammate by plain display name (no `@` needed if they're already known to the bot — `Alex` always works since it has no real account to mention). Expect: confirmation message, task disappears from `/escalated`.
+4. **`/confirm-reassign <taskId>`** on a task not offered to you — expect a rejection message, proving only the actual proposed owner can confirm.
+5. Post **"I'm swamped this week"** with no slash command — expect a negotiation to fire automatically.
+6. Post **"heads-down on family stuff till Monday"** — expect it to still fire, this time via the AI classifier, not the keyword list.
+7. Run **`/go-ooo` twice** within 45 seconds — expect the second to be blocked with a cooldown message.
+8. **`/back-from-ooo`** — expect a welcome-back message that also flags if you still have pending confirmations or escalated tasks outstanding (it tells you *that* something's outstanding, not the specifics of what or who).
+9. **`@ooo-negotiator who's discussed the onboarding document?`** — expect up to 5 matching messages with links. Also try mentioning the bot with no question, expect it to ask you for one.
+10. Run `/go-ooo` in a channel the bot's not in — expect a prompt to invite it first, instead of the flow silently half-running.
 
-Some of these are inherently two-person tests (that's the point of the
-feature) — marked below.
+**Needs a second real person**
 
-### Solo tests (one real account, e.g. `bgk02`)
+11. Have the proposed candidate react ✅ on their confirm prompt — expect "Confirmed by..." and the task actually moves. Try reacting as someone else, expect it to be ignored.
+12. Concurrent negotiations targeting the same candidate — this one's hard to trigger live reliably, it's verified by an automated test instead, confirming the second negotiation escalates instead of double-booking.
 
-**1. Basic negotiation trigger**
-- Run `/go-ooo`.
-- Expected: mock commitments seeded (`task_001` high priority, `task_002`
-  low priority). Candidates considered = Swetha (load 4), Alex (load 5) —
-  you're excluded from your own negotiation.
-  - `task_001`: Swetha's load is over threshold but the task is
-    high-priority, so she accepts → trace ends "awaiting confirmation from
-    Swetha."
-  - `task_002`: Swetha declines (low priority, no bump), Alex declines too →
-    escalates.
-  - Final message: *"Ran negotiation for bgk02: 1 task(s) awaiting
-    confirmation, 1 escalated to a human."*
 
-**2. Escalation list**
-- Run `/escalated`.
-- Expected: lists `task_002` (from you).
-
-**3. Resolve an escalation**
-- Run `/resolve-escalation task_002 Alex` — type `Alex` as plain text, no
-  `@`, since Alex has no real Slack account to mention/autocomplete.
-- Expected: *"'Update onboarding doc' manually assigned to `<@U_ALEX>`."*
-  `/escalated` should now be empty.
-
-**4. Manual confirm authorization check**
-- With `task_001` still pending (within 45s of step 1), run
-  `/confirm-reassign task_001`.
-- Expected: rejected — *"Only <@Swetha> can confirm this reassignment."*
-  Proves you can't confirm someone else's offer on their behalf.
-- If you wait past 45s first, expect instead: *"No pending negotiation found
-  for task task_001."* — also correct, since it already auto-escalated.
-
-**5. Message-trigger, regex path**
-- Post a plain message containing a trigger word, e.g. "I'm swamped this
-  week" (no slash command).
-- Expected: negotiation fires automatically. Terminal shows
-  `[index.js] Message trigger matched via regex from ...`.
-
-**6. Message-trigger, Groq/AI path**
-- Post something the regex genuinely won't catch — the regex list is
-  `out of office|ooo|swamped|underwater|overloaded`, so avoid those words.
-  E.g.: "heads-down on family stuff till Monday."
-- Expected: still triggers negotiation. Terminal shows `matched via groq
-  (...)` with Groq's classification reason — confirms the AI classifier, not
-  just regex, is catching it.
-
-**7. Cooldown guard**
-- Run `/go-ooo` twice within ~3 minutes.
-- Expected: second attempt replies *"Already running a negotiation for you
-  recently — give it a few minutes before triggering again."*
-
-**8. Back from OOO**
-- Run `/back-from-ooo`.
-- Expected: *"Welcome back — marked you active again."* Plus a note about
-  outstanding pending/escalated items if any remain.
-
-### Needs a second real account (e.g. Swetha)
-
-**9. Reaction confirm (✅/❌)**
-- Have Swetha react ✅ on a confirm prompt addressed to her (or trigger her
-  own `/go-ooo` — since you (load 2) will be her top candidate and accept
-  immediately).
-- Expected: bot posts *"Confirmed by <@Swetha> — ... is now theirs."*
-  in-thread; the task actually moves (check load numbers via a fresh
-  `/go-ooo` or `/escalated`).
-- Also test: have someone **other than** the named candidate react ✅ —
-  expected to be silently ignored, nothing happens.
-
-**10. Concurrent-negotiation race (double-booking guard)**
-- Hard to reproduce live with only two real accounts, because whichever
-  person goes OOO always gets the *other* real person as their top
-  candidate — there's no natural overlap to double-book on. Verified instead
-  via a scripted test: two simulated OOO triggers for different people both
-  targeting the same lightest-loaded candidate; confirmed the second
-  negotiation skips a candidate who's already the unconfirmed tentative
-  owner of another pending offer, and escalates instead of double-booking.
-
-## Known limitations (accepted, not fixed)
-
-1. **`currentLoad` gets silently reset by real reassignments.** Seed values
-   (2 / 4 / 5) represent an assumed starting workload, but
-   `stateStore.reassignCommitment()` recalculates `currentLoad` as
-   `openCommitments.length` on every reassignment. The first time a seeded
-   person actually receives a tracked task, their load "resets" to just that
-   count, discarding the fictional baseline. Practical effect: a
-   deliberately-overloaded persona (e.g. Alex, seeded at load 5) can
-   suddenly look like the *lightest*-loaded candidate after receiving even
-   one real task, and start accepting offers that persona was meant to
-   reliably decline. Workaround: reset `data/*.json` right before an actual
-   demo run rather than mid-rehearsal.
-2. **`/resolve-escalation`'s user argument isn't always a real Slack
-   mention.** Slack's slash-command text field doesn't reliably convert
-   `@name` into `<@USERID>` markup the way a regular message does, even when
-   picked from the autocomplete dropdown. The command accepts a real mention
-   (`<@U123>`) or a plain display name matched case-insensitively against
-   known people in `stateStore` — but a typo or unknown name still just
-   produces a generic "couldn't find that user" message.
-3. **Two negotiations triggered back-to-back for different OOO people could
-   still both target the same candidate** in scenarios where the top
-   candidate for both isn't the same person as either OOO trigger (e.g. via
-   a third seeded person) faster than either negotiation completes its
-   synchronous candidate-selection + hold-recording step. In practice this
-   window is now essentially closed (see item 10 above), but it relies on
-   `stateStore.addPendingNegotiation` running before any `await` in
-   `index.js`'s `runNegotiationFlow` — don't reorder that without
-   re-verifying.
