@@ -448,6 +448,10 @@ app.message(async ({ message, say, client }) => {
 // reused inside runNegotiationFlow (slash commands and plain regex-matched
 // messages never carry one).
 app.event("app_mention", async ({ event, client, say }) => {
+  // TEMP DEBUG: log the raw event so we can see exactly what Slack sends,
+  // instead of guessing at field names from docs. Remove once resolved.
+  console.log("[DEBUG] app_mention raw event:", JSON.stringify(event, null, 2));
+
   const actionToken = event.assistant_thread?.action_token;
   const query = (event.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
 
