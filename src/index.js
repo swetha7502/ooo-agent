@@ -466,7 +466,10 @@ app.event("app_mention", async ({ event, client, say }) => {
   }
 
   try {
-    const result = await client.assistant.search.context({
+    // @slack/web-api (installed version) doesn't have a wrapped method for
+    // this endpoint yet — assistant.* only exposes .threads.*. apiCall() is
+    // the SDK's generic escape hatch for calling any method by name.
+    const result = await client.apiCall("assistant.search.context", {
       query,
       action_token: actionToken,
       content_types: ["messages"],
@@ -478,9 +481,11 @@ app.event("app_mention", async ({ event, client, say }) => {
       return;
     }
 
+    // <@id>/<#id> auto-render as proper mentions in Slack regardless of
+    // whether the API also returns a display-name field.
     const lines = matches
       .slice(0, 5)
-      .map((m) => `• *${m.author_name}* in #${m.channel_name}: ${m.content} (<${m.permalink}|view>)`);
+      .map((m) => `• <@${m.author_user_id}> in <#${m.channel_id}>: ${m.content} (<${m.permalink}|view>)`);
     await say(`:mag: Here's what I found for "${query}":\n${lines.join("\n")}`);
   } catch (err) {
     console.warn("[index.js] assistant.search.context failed:", err.message);
