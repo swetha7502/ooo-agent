@@ -8,7 +8,7 @@ Every team has that moment: someone goes OOO or just gets slammed, and their ope
 
 The bot's already live, you just need to join and talk to it.
 
-1. Join the workspace: `[INSERT SLACK WORKSPACE INVITE LINK HERE]`
+1. Join the test sandbox workspace
 2. Create your own channel (e.g. `#test-yourname`) instead of testing in a shared one — keeps your run clean from anyone else's in-progress test.
 3. Invite the bot in: `/invite @ooo-negotiator`
 4. Work through the checklist further down whenever you're ready.
