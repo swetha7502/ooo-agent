@@ -439,6 +439,51 @@ app.message(async ({ message, say, client }) => {
   }
 });
 
+// --- Trigger 3: @-mention a real-time Slack search, to help a human pick a
+// reassignment target (e.g. "@ooo-negotiator who's been discussing the
+// onboarding doc?") before running /resolve-escalation. Uses the Real-Time
+// Search API (assistant.search.context). With a bot token that call requires
+// a short-lived action_token, which Slack only attaches to an event when the
+// bot is @-mentioned or DM'd — so unlike the other triggers, this can't be
+// reused inside runNegotiationFlow (slash commands and plain regex-matched
+// messages never carry one).
+app.event("app_mention", async ({ event, client, say }) => {
+  const actionToken = event.assistant_thread?.action_token;
+  const query = (event.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
+
+  if (!actionToken) {
+    await say("I can only run a real-time search when Slack grants a search action token on this @-mention — if this keeps happening, check the app's search scopes are approved for this workspace.");
+    return;
+  }
+
+  if (!query) {
+    await say("Mention me with something to search for, e.g. `@ooo-negotiator who's been discussing the onboarding doc?`");
+    return;
+  }
+
+  try {
+    const result = await client.assistant.search.context({
+      query,
+      action_token: actionToken,
+      content_types: ["messages"],
+    });
+
+    const matches = result.results?.messages || [];
+    if (matches.length === 0) {
+      await say(`:mag: No recent Slack messages found for "${query}".`);
+      return;
+    }
+
+    const lines = matches
+      .slice(0, 5)
+      .map((m) => `• *${m.author_name}* in #${m.channel_name}: ${m.content} (<${m.permalink}|view>)`);
+    await say(`:mag: Here's what I found for "${query}":\n${lines.join("\n")}`);
+  } catch (err) {
+    console.warn("[index.js] assistant.search.context failed:", err.message);
+    await say(`Couldn't run a real-time search right now (${err.message}).`);
+  }
+});
+
 (async () => {
   await app.start();
   console.log("⚡️ OOO Negotiation Agent is running (Socket Mode, Day 1 mock data)");

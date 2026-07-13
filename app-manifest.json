@@ -58,7 +58,10 @@
         "commands",
         "reactions:read",
         "reactions:write",
-        "users:read"
+        "users:read",
+        "search:read.public",
+        "search:read.files",
+        "search:read.users"
       ]
     }
   },
@@ -67,7 +70,8 @@
       "bot_events": [
         "message.channels",
         "message.groups",
-        "reaction_added"
+        "reaction_added",
+        "app_mention"
       ]
     },
     "interactivity": {
